@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Mic,
   Loader2,
@@ -14,40 +14,104 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [hasResult, setHasResult] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [error, setError] = useState("");
+  const recognitionRef = useRef(null);
 
   const isDark = theme === "dark";
+  const [resultData, setResultData] = useState({
+    socialPost: "",
+    teamTasks: [],
+    analytics: "",
+  });
 
-  const resultData = useMemo(
-    () => ({
-      socialPost:
-        "Запускаем AI Business Fast-Track: превращаем голосовые идеи в готовый контент, задачи и аналитику за минуты. Скорость, фокус и результат для команд нового поколения. 🚀✨ #AI #Startup #Productivity",
-      teamTasks: [
-        "Утвердить оффер и ключевой value proposition.",
-        "Собрать MVP-демо и лендинг для ранних заявок.",
-        "Запустить тестовую кампанию в соцсетях и собрать лиды.",
-        "Провести 10 интервью с потенциальными клиентами.",
-      ],
-      analytics:
-        "Идея показывает высокий потенциал: экономия времени команды до 35% и ускорение вывода гипотез на рынок. При среднем чеке B2B-модели ожидаемая маржинальность выглядит устойчиво положительной.",
-    }),
-    []
-  );
-
-  const startVoiceFlow = () => {
-    if (isRecording || isLoading) return;
-
+  const startVoiceFlow = async () => {
+    if (isLoading) return;
+    setError("");
     setHasResult(false);
-    setIsRecording(true);
+    setTranscript("");
 
-    setTimeout(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setError(
+        "Ваш браузер не поддерживает голосовой ввод. Откройте в Google Chrome."
+      );
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.lang = "ru-RU";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+
+    let finalText = "";
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+    };
+
+    recognition.onresult = (event) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const text = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalText += `${text} `;
+        } else {
+          interim += `${text} `;
+        }
+      }
+      setTranscript((finalText + interim).trim());
+    };
+
+    recognition.onerror = (event) => {
       setIsRecording(false);
-      setIsLoading(true);
+      setError(`Ошибка распознавания: ${event.error}`);
+    };
 
-      setTimeout(() => {
-        setIsLoading(false);
+    recognition.onend = async () => {
+      setIsRecording(false);
+      const idea = (finalText || transcript).trim();
+
+      if (!idea) {
+        setError("Не удалось распознать речь. Попробуйте еще раз.");
+        return;
+      }
+
+      try {
+        setIsLoading(true);
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idea }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data?.error || "Ошибка генерации");
+        }
+
+        setResultData({
+          socialPost: data.socialPost || "",
+          teamTasks: Array.isArray(data.teamTasks) ? data.teamTasks : [],
+          analytics: data.analytics || "",
+        });
         setHasResult(true);
-      }, 2000);
-    }, 1100);
+      } catch (e) {
+        setError(e?.message || "Ошибка генерации");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    recognition.start();
+  };
+
+  const stopVoiceFlow = () => {
+    recognitionRef.current?.stop();
   };
 
   return (
@@ -99,7 +163,7 @@ export default function App() {
           <section className="mb-12 flex w-full max-w-xl flex-col items-center text-center">
             <button
               type="button"
-              onClick={startVoiceFlow}
+              onClick={isRecording ? stopVoiceFlow : startVoiceFlow}
               className={`group relative inline-flex h-44 w-44 items-center justify-center rounded-full border text-sm font-medium transition-all duration-300 sm:h-52 sm:w-52 ${
                 isDark
                   ? "border-zinc-700 bg-zinc-900 hover:bg-zinc-800"
@@ -119,18 +183,36 @@ export default function App() {
               ) : (
                 <div className="flex flex-col items-center gap-2">
                   <Mic className="h-8 w-8" />
-                  <span>Начать запись голоса</span>
+                  <span>{isRecording ? "Остановить запись" : "Начать запись голоса"}</span>
                 </div>
               )}
             </button>
 
             <p className={`mt-5 text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
               {isRecording
-                ? "Идет запись..."
+                ? "Слушаю вас... Нажмите кнопку повторно, чтобы остановить."
                 : isLoading
-                ? "Обрабатываем идею и генерируем результат..."
-                : "Нажмите, чтобы запустить быстрый AI-пайплайн"}
+                ? "Генерируем результат..."
+                : "Нажмите кнопку и проговорите бизнес-идею"}
             </p>
+
+            {transcript && (
+              <div
+                className={`mt-4 w-full rounded-xl border p-3 text-left text-sm ${
+                  isDark
+                    ? "border-zinc-800 bg-zinc-900/80 text-zinc-300"
+                    : "border-zinc-200 bg-white text-zinc-700"
+                }`}
+              >
+                <b>Распознано:</b> {transcript}
+              </div>
+            )}
+
+            {error && (
+              <div className="mt-4 w-full rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-left text-sm text-red-300">
+                {error}
+              </div>
+            )}
           </section>
 
           {hasResult && (
@@ -159,8 +241,8 @@ export default function App() {
                   <h2 className="text-base font-semibold">Задачи для команды</h2>
                 </div>
                 <ul className={`space-y-2 text-sm ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
-                  {resultData.teamTasks.map((task) => (
-                    <li key={task} className="flex gap-2">
+                  {resultData.teamTasks.map((task, idx) => (
+                    <li key={`${idx}-${task}`} className="flex gap-2">
                       <span className="mt-1 h-1.5 w-1.5 rounded-full bg-current opacity-70" />
                       <span>{task}</span>
                     </li>
