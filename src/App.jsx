@@ -91,7 +91,7 @@ export default function App() {
         const data = await res.json();
 
         if (!res.ok) {
-          throw new Error(data?.error || "Ошибка генерации");
+          throw new Error(data?.details || data?.error || "Ошибка генерации");
         }
 
         setResultData({
